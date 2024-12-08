@@ -11,12 +11,35 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from openai import OpenAI, Client
 from groq import Groq, Client
-from typing import List, Dict
+from typing import Dict, List, Tuple
 import os
 from dotenv import load_dotenv
+from xml.etree import ElementTree
+import time
+from bs4 import BeautifulSoup
+import json
 
 # Load environment variables
 load_dotenv()
+
+# Load the company_tickers.json file
+def load_ticker_to_cik_mapping():
+    try:
+        file_path = os.path.join(os.getcwd(), "company_tickers.json")
+        with open(file_path, "r") as f:
+            data = json.load(f)
+        
+        # Create a dictionary mapping tickers to CIKs
+        ticker_to_cik = {
+            company_data["ticker"]: str(company_data["cik_str"]).zfill(10)
+            for company_data in data.values()
+        }
+        return ticker_to_cik
+    except Exception as e:
+        print(f"Error loading ticker-to-CIK mapping: {e}")
+        return {}
+    
+ticker_to_cik_mapping = load_ticker_to_cik_mapping()
 
 # Initialize OpenAI client
 # client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
@@ -80,18 +103,6 @@ def try_llm_request(client, model_name: str, messages: List[Dict]) -> str:
         except Exception as e:
             print(f"Failed to use GPT-4: {str(e)}")
             return None
-
-# def try_llm_request(client, model_name: str, messages: List[Dict]) -> str:
-#     """Attempt to generate response with a specific LLM model"""
-#     try:
-#         response = client.chat.completions.create(
-#             model=model_name,
-#             messages=messages
-#         )
-#         return response.choices[0].message.content
-#     except Exception as e:
-#         print(f"Failed to use {model_name}: {str(e)}")
-#         return None
     
 def enhance_search_query_with_llm(user_query: str) -> str:
     """Use LLM to create a detailed search query"""
@@ -374,6 +385,536 @@ def add_market_trend_radar(all_stock_data):
                 for factor, explanation in explanations.items():
                     st.write(f"**{factor}:** {explanation}")
 
+def fetch_stock_news(ticker: str, max_articles: int = 5, days_back: int = 7) -> List[Dict]:
+    """
+    Fetch news for a given stock ticker from Yahoo Finance RSS
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        max_articles (int): Maximum number of articles to fetch (default: 5)
+        days_back (int): Only fetch articles from the last N days (default: 7)
+    """
+    rss_feed_url = f'https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    
+    try:
+        response = requests.get(rss_feed_url, headers=headers)
+        if response.status_code == 200:
+            root = ElementTree.fromstring(response.content)
+            news_items = []
+            all_news_items = []  # Store all news items for fallback
+            current_time = datetime.now()
+            
+            # First pass: collect all articles and their dates
+            for item in root.findall('./channel/item'):
+                pub_date = datetime.strptime(item.find('pubDate').text, '%a, %d %b %Y %H:%M:%S %z')
+                days_old = (current_time - pub_date.replace(tzinfo=None)).days
+                
+                news_item = {
+                    'title': item.find('title').text,
+                    'link': item.find('link').text,
+                    'pubDate': item.find('pubDate').text,
+                    'description': item.find('description').text,
+                    'ticker': ticker,
+                    'days_ago': days_old
+                }
+                
+                # Add to the main list if within days_back
+                if days_old <= days_back:
+                    news_items.append(news_item)
+                
+                # Add to all_news_items for potential fallback
+                all_news_items.append(news_item)
+                
+                # Break if we've reached max_articles for recent news
+                if len(news_items) >= max_articles:
+                    break
+            
+            # If we don't have enough recent articles, use the most recent available
+            if len(news_items) < max_articles:
+                print(f"Warning: Only found {len(news_items)} recent articles for {ticker}. Using older articles as fallback.")
+                # Sort all_news_items by date (most recent first)
+                all_news_items.sort(key=lambda x: x['days_ago'])
+                
+                # Take the most recent articles up to max_articles
+                news_items = all_news_items[:max_articles]
+            
+            return news_items
+            
+    except Exception as e:
+        print(f"Error fetching news for {ticker}: {str(e)}")
+        return []
+
+
+
+def analyze_single_article(article: Dict) -> Tuple[float, Dict]:
+    """Analyze sentiment of a single news article"""
+    messages = [
+        {"role": "system", "content": """You are a financial analyst. Analyze this news article and provide:
+        1. A numerical sentiment score from 0 to 100 (just the number)
+        2. A brief summary of key developments
+        3. Key risks and challenges identified
+        4. Future outlook implications
+
+        Format your response exactly like this:
+        SENTIMENT: [score]
+        DEVELOPMENTS: [summary]
+        RISKS: [risks]
+        OUTLOOK: [outlook]"""},
+        {"role": "user", "content": f"Analyze this news article: Title: {article['title']}\nContent: {article['description']}"}
+    ]
+    
+    response = try_llm_request(client, "llama-3.3-70b-versatile", messages)
+    
+    if not response:
+        return 50.0, {
+            "recent_developments": "Analysis unavailable",
+            "risks_challenges": "Analysis unavailable",
+            "future_outlook": "Analysis unavailable"
+        }
+    
+    try:
+        # Parse the response line by line
+        lines = response.split('\n')
+        sentiment_score = 50.0  # Default score
+        developments = "No developments available"
+        risks = "No risks available"
+        outlook = "No outlook available"
+        
+        for line in lines:
+            line = line.strip()
+            if line.startswith('SENTIMENT:'):
+                try:
+                    score = line.split('SENTIMENT:')[1].strip()
+                    score = ''.join(c for c in score if c.isdigit() or c == '.')
+                    sentiment_score = float(score)
+                except:
+                    sentiment_score = 50.0
+            elif line.startswith('DEVELOPMENTS:'):
+                developments = line.split('DEVELOPMENTS:')[1].strip()
+            elif line.startswith('RISKS:'):
+                risks = line.split('RISKS:')[1].strip()
+            elif line.startswith('OUTLOOK:'):
+                outlook = line.split('OUTLOOK:')[1].strip()
+        
+        return sentiment_score, {
+            "recent_developments": developments,
+            "risks_challenges": risks,
+            "future_outlook": outlook
+        }
+        
+    except Exception as e:
+        print(f"Error parsing sentiment analysis: {str(e)}")
+        return 50.0, {
+            "recent_developments": "Error analyzing developments",
+            "risks_challenges": "Error analyzing risks",
+            "future_outlook": "Error analyzing outlook"
+        }
+
+def analyze_news_sentiment(news_items: List[Dict]) -> Tuple[float, Dict]:
+    """Analyze sentiment of all news items for a stock"""
+    if not news_items:
+        return 50.0, {
+            "recent_developments": "No news available",
+            "risks_challenges": "No news available",
+            "future_outlook": "No news available"
+        }
+    
+    article_sentiments = []
+    latest_analysis = None
+    
+    # Analyze each article individually
+    for item in news_items:
+        sentiment_score, analysis = analyze_single_article(item)
+        article_sentiments.append(sentiment_score)
+        item['sentiment_score'] = sentiment_score  # Add sentiment score to the item
+        item.update(analysis)  # Add analysis details to the item
+        if latest_analysis is None:
+            latest_analysis = analysis
+    
+    # Calculate average sentiment
+    avg_sentiment = sum(article_sentiments) / len(article_sentiments)
+    
+    return avg_sentiment, latest_analysis
+
+def add_sentiment_analysis(all_stock_data: List[Dict]):
+    """Add sentiment analysis section to the app"""
+    st.subheader("Sentiment Analysis")
+    
+    # Fetch and analyze news for each stock
+    sentiment_data = []
+    news_data = []
+    
+    with st.spinner("Analyzing recent news..."):
+        for stock in all_stock_data:
+            ticker = stock['ticker']
+            news_items = fetch_stock_news(ticker, max_articles=5, days_back=7)
+            
+            # Analyze all news items - this will now add sentiment scores to each item
+            avg_sentiment, analysis = analyze_news_sentiment(news_items)
+            
+            sentiment_data.append({
+                'ticker': ticker,
+                'sentiment_score': avg_sentiment,
+                'name': stock['name']
+            })
+            
+            # Store news items with their individual sentiment scores
+            news_data.extend(news_items)
+    
+    # Create sentiment score chart with custom color scheme
+    sentiment_df = pd.DataFrame(sentiment_data)
+    sentiment_df = sentiment_df.sort_values('sentiment_score', ascending=False)
+    
+    fig = px.bar(sentiment_df,
+                 x='ticker',
+                 y='sentiment_score',
+                 title='Average Sentiment Score by Stock',
+                 labels={'ticker': 'Stock Symbol', 
+                        'sentiment_score': 'Average Sentiment Score (-100 to +100)'})
+    
+    # Update layout with proper scaling and zero line
+    fig.update_layout(
+        yaxis=dict(
+            range=[-100, 100],      # Fixed range from -100 to +100
+            zeroline=True,          # Show line at y=0
+            zerolinewidth=1,        # Width of zero line
+            zerolinecolor='gray',   # Color of zero line
+            gridcolor='lightgray',  # Light grid lines
+            title_standoff=10       # Space between title and axis
+        ),
+        hovermode='x unified',
+        hoverlabel=dict(
+            bgcolor="white",
+            font_size=14
+        ),
+        plot_bgcolor='white',       # White background
+        margin=dict(t=30, b=0, r=10, l=10)  # Adjust margins
+    )
+    
+    # Color bars based on sentiment value
+    fig.update_traces(marker_color=sentiment_df['sentiment_score'].apply(
+        lambda x: 'rgb(220,20,60)' if x <= -50 else      # Deep red for very negative
+        'rgb(255,99,71)' if x < 0 else                   # Light red for slightly negative
+        'rgb(25,25,112)' if x >= 50 else                 # Deep blue for very positive
+        'rgb(65,105,225)'                                # Light blue for slightly positive
+    ))
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Display rankings and analysis
+    st.subheader("Stock Rankings based on News Sentiment:")
+    for _, row in sentiment_df.iterrows():
+        stock_news = [item for item in news_data if item['ticker'] == row['ticker']]
+        if stock_news:
+            st.write(f"{row['ticker']} ({row['name']}): Sentiment score {row['sentiment_score']:.2f}")
+            with st.expander(f"Details for {row['ticker']}"):
+                latest = stock_news[0]
+                st.write("**Recent Developments:**", latest.get('recent_developments', 'N/A'))
+                st.write("**Risks & Challenges:**", latest.get('risks_challenges', 'N/A'))
+                st.write("**Future Outlook:**", latest.get('future_outlook', 'N/A'))
+    
+    # Display detailed news data in a scrollable window
+    st.subheader("Detailed News Data")
+    
+    # Create a DataFrame with all the news data including individual sentiment scores
+    detailed_news_df = pd.DataFrame([
+        {
+            'URL': item['link'],
+            'Published Time': item['pubDate'],
+            'Related Tickers': item['ticker'],
+            'Scraped Text': item.get('description', ''),
+            'Sentiment': f"{item.get('sentiment_score', 0):.1f}",  # Format to 1 decimal place
+            'Recent Developments': item.get('recent_developments', ''),
+            'Risks & Challenges': item.get('risks_challenges', ''),
+            'Future Outlook': item.get('future_outlook', '')
+        }
+        for item in news_data
+    ])
+    
+    # Display the DataFrame in a scrollable container
+    st.dataframe(
+        detailed_news_df,
+        use_container_width=True,
+        height=300
+    )
+    
+    # Create downloadable CSV
+    csv = detailed_news_df.to_csv(index=False)
+    st.download_button(
+        label="Download News Data as CSV",
+        data=csv,
+        file_name="stock_news_analysis.csv",
+        mime="text/csv"
+    )
+
+
+def add_sentiment_analysis(all_stock_data: List[Dict]):
+    """Add sentiment analysis section to the app"""
+    st.subheader("Sentiment Analysis")
+    
+    # Fetch and analyze news for each stock
+    sentiment_data = []
+    news_data = []
+    
+    with st.spinner("Analyzing recent news..."):
+        for stock in all_stock_data:
+            ticker = stock['ticker']
+            news_items = fetch_stock_news(ticker, max_articles=5, days_back=7)
+            sentiment_score, analysis = analyze_news_sentiment(news_items)
+            
+            sentiment_data.append({
+                'ticker': ticker,
+                'sentiment_score': sentiment_score,
+                'name': stock['name']
+            })
+            
+            # Store news items with analysis
+            for item in news_items:
+                item.update(analysis)
+                news_data.append(item)
+    
+    # Create sentiment score chart with custom color scheme
+    sentiment_df = pd.DataFrame(sentiment_data)
+    sentiment_df = sentiment_df.sort_values('sentiment_score', ascending=False)
+    
+    # Use a custom color scale that ensures visibility
+    fig = px.bar(sentiment_df,
+                 x='ticker',
+                 y='sentiment_score',
+                 title='Average Sentiment Score by Stock',
+                 labels={'ticker': 'Stock Symbol', 'sentiment_score': 'Average Sentiment Score'})
+    
+    # Update the color scheme to use solid, easily distinguishable colors
+    fig.update_traces(marker_color=[
+        'rgb(25, 25, 112)',  # Dark Blue
+        'rgb(0, 71, 171)',   # Medium Blue
+        'rgb(30, 144, 255)', # Dodger Blue
+        'rgb(0, 119, 190)',  # Ocean Blue
+        'rgb(0, 147, 175)',  # Blue Green
+        'rgb(0, 163, 204)'   # Light Blue
+    ])
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Display rankings and analysis
+    st.subheader("Stock Rankings based on News Sentiment:")
+    for _, row in sentiment_df.iterrows():
+        stock_news = [item for item in news_data if item['ticker'] == row['ticker']]
+        if stock_news:
+            analysis = stock_news[0]
+            st.write(f"{row['ticker']} ({row['name']}): Sentiment score {row['sentiment_score']:.2f}")
+            with st.expander(f"Details for {row['ticker']}"):
+                st.write("**Recent Developments:**", analysis.get('recent_developments', 'N/A'))
+                st.write("**Risks & Challenges:**", analysis.get('risks_challenges', 'N/A'))
+                st.write("**Future Outlook:**", analysis.get('future_outlook', 'N/A'))
+    
+    # Display detailed news data in a scrollable window
+    st.subheader("Detailed News Data")
+    
+    # Create a DataFrame with all the news data
+    detailed_news_df = pd.DataFrame([
+        {
+            'URL': item['link'],
+            'Published Time': item['pubDate'],
+            'Related Tickers': item['ticker'],
+            'Scraped Text': item.get('description', ''),
+            'Sentiment': item.get('sentiment_score', ''),
+            'Recent Developments': item.get('recent_developments', ''),
+            'Risks & Challenges': item.get('risks_challenges', ''),
+            'Future Outlook': item.get('future_outlook', '')
+        }
+        for item in news_data
+    ])
+    
+    # Display the DataFrame in a scrollable container
+    st.dataframe(
+        detailed_news_df,
+        use_container_width=True,
+        height=300  # Adjust height as needed
+    )
+    
+    # Create downloadable CSV
+    csv = detailed_news_df.to_csv(index=False)
+    st.download_button(
+        label="Download News Data as CSV",
+        data=csv,
+        file_name="stock_news_analysis.csv",
+        mime="text/csv"
+    )
+
+
+def get_latest_10q_filing(ticker: str) -> Tuple[str, str, str]:
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (compatible; CompanyResearch/1.0; yourname@email.com)'
+        }
+        
+        # Step 1: Retrieve CIK from local mapping
+        cik = ticker_to_cik_mapping.get(ticker.upper())
+        if not cik:
+            print(f"No CIK found for {ticker} in local mapping.")
+            return None, None, None
+
+        print(f"Ticker: {ticker}, CIK: {cik}")
+
+        # Step 2: Fetch filings from SEC submissions API
+        filings_url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+        response = requests.get(filings_url, headers=headers)
+        if response.status_code != 200:
+            print(f"Failed to fetch filings data for {ticker}. Response: {response.text}")
+            return None, None, None
+
+        filings_data = response.json()
+        recent_filings = filings_data.get("filings", {}).get("recent", {})
+        
+        # Step 3: Find the latest 10-Q filing
+        for idx, form in enumerate(recent_filings.get("form", [])):
+            if form == "10-Q":
+                filing_date = recent_filings["filingDate"][idx]
+                accession_number = recent_filings["accessionNumber"][idx].replace('-', '')
+                document_url = recent_filings["primaryDocument"][idx]
+                filing_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession_number}/{document_url}"
+                return filing_date, filing_url, "Filing text not fetched yet"
+        
+        print(f"No 10-Q filing found for {ticker}")
+        return None, None, None
+    except Exception as e:
+        print(f"Error fetching 10-Q for {ticker}: {str(e)}")
+        return None, None, None
+
+
+def analyze_10q_with_llm(filing_text: str) -> Dict:
+    """Analyze 10-Q filing text using LLM with specific financial metrics focus"""
+    messages = [
+        {"role": "system", "content": """You are a financial analyst. Analyze this 10-Q filing and provide detailed scores 
+        (0-100) for the following factors, focusing on specific financial metrics and indicators:
+        
+        1. Performance: Analyze revenue growth, profit margins, EPS trends
+        2. Growth Potential: Evaluate R&D investment, market expansion plans, new product developments
+        3. Risk: Assess debt levels, regulatory challenges, market competition
+        4. Competitive Edge: Evaluate market share, patents/IP, brand strength
+        
+        Base your scoring on concrete financial metrics and provide specific justification.
+        
+        Format your response exactly like this:
+        PERFORMANCE: [score]
+        PERFORMANCE_DETAILS: [specific metrics and reasons]
+        GROWTH_POTENTIAL: [score]
+        GROWTH_DETAILS: [specific metrics and reasons]
+        RISK: [score]
+        RISK_DETAILS: [specific metrics and reasons]
+        COMPETITIVE_EDGE: [score]
+        COMPETITIVE_DETAILS: [specific metrics and reasons]"""},
+        {"role": "user", "content": f"Analyze this 10-Q filing data: {filing_text[:8000]}"}  # Increased context
+    ]
+    
+    response = try_llm_request(client, "llama-3.3-70b-versatile", messages)
+    
+    if not response:
+        return {
+            "performance": 0,
+            "growth_potential": 0,
+            "risk": 0,
+            "competitive_edge": 0
+        }
+    
+    try:
+        scores = {
+            "performance": 0,
+            "growth_potential": 0,
+            "risk": 0,
+            "competitive_edge": 0
+        }
+        
+        # Parse scores and details
+        lines = response.split('\n')
+        for line in lines:
+            if ':' not in line:
+                continue
+            key, value = line.split(':', 1)
+            key = key.strip().lower()
+            value = value.strip()
+            
+            if key == 'performance':
+                scores['performance'] = int(float(value))
+            elif key == 'growth_potential':
+                scores['growth_potential'] = int(float(value))
+            elif key == 'risk':
+                scores['risk'] = int(float(value))
+            elif key == 'competitive_edge':
+                scores['competitive_edge'] = int(float(value))
+                
+        return scores
+        
+    except Exception as e:
+        print(f"Error parsing LLM response: {str(e)}")
+        return {
+            "performance": 0,
+            "growth_potential": 0,
+            "risk": 0,
+            "competitive_edge": 0
+        }
+
+
+def create_progress_bar(value: int, color: str) -> str:
+    """Create HTML for a progress bar"""
+    return f"""
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <div style="background-color: #1E1E1E; width: 200px; height: 20px; border-radius: 10px; overflow: hidden;">
+                <div style="width: {value}%; height: 100%; background-color: {color}; transition: width 0.5s;"></div>
+            </div>
+            <span style="color: {color};">{value}</span>
+        </div>
+    """
+def add_sec_filings_section(all_stock_data: List[Dict]):
+    """Add SEC Filings section to the app"""
+    st.subheader("SEC Filings")
+    
+    for stock in all_stock_data:
+        ticker = stock['ticker']
+        
+        try:
+            filing_date, filing_url, filing_text = get_latest_10q_filing(ticker)
+            
+            # Create two columns for layout
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write(f"**{ticker}**")
+                if filing_date and filing_url and filing_text:
+                    st.write("Periodic Financial Reports")
+                    st.write(filing_date)
+                    st.markdown(f"[View 10-Q Filing]({filing_url})")
+                else:
+                    st.write("N/A")
+                    st.write("No filing available")
+            
+            with col2:
+                st.write("Key Insights:")
+                if filing_text:
+                    insights = analyze_10q_with_llm(filing_text)
+                    
+                    # Create progress bars with different colors
+                    st.markdown(f"""
+                        Performance: {create_progress_bar(insights['performance'], '#4CAF50')}
+                        Growth Potential: {create_progress_bar(insights['growth_potential'], '#2196F3')}
+                        Risk: {create_progress_bar(insights['risk'], '#f44336')}
+                        Competitive Edge: {create_progress_bar(insights['competitive_edge'], '#9C27B0')}
+                    """, unsafe_allow_html=True)
+                else:
+                    st.write("No insights available")
+            
+            st.markdown("---")  # Add separator between stocks
+            
+        except Exception as e:
+            print(f"Error processing {ticker}: {str(e)}")
+            st.write(f"**{ticker}**")
+            st.write("Error retrieving filing information")
+            st.markdown("---")
+
 
 def main():
     st.set_page_config(page_title="Automated Stock Analysis", layout="wide", page_icon="📈")
@@ -491,44 +1032,9 @@ def main():
                     stock_metadata[ticker] = result.metadata
             
             print("\nFound Tickers:", tickers)
-    # if search_clicked and query:
-    #     with st.spinner("Processing your request..."):
-    #         debug_expander = st.expander("Debug Information", expanded=True)
-            
-    #         with debug_expander:
-    #             st.write("**Search Process Debug Info**")
-    #             enhanced_query = enhance_search_query_with_llm(query)
-    #             st.code(f"Original Query: {query}")
-    #             st.code(f"Enhanced Query: {enhanced_query}")
-            
-    #         # Get search results
-    #         search_results = search_stocks_in_pinecone(enhanced_query)
-    #         if not search_results:
-    #             st.error("No matching stocks found. Please try a different search query.")
-    #             return
 
-    #         # Extract tickers and create a mapping of ticker to metadata
-    #         stock_metadata = {}
-    #         tickers = []
-    #         for result in search_results:
-    #             if 'Ticker' in result.metadata:
-    #                 ticker = result.metadata['Ticker']
-    #                 tickers.append(ticker)
-    #                 stock_metadata[ticker] = result.metadata
-
-    #         with debug_expander:
-    #             st.write("Found Tickers:", tickers)
 
             try:
-                # Get realtime data
-                # realtime_data = get_batch_realtime_data(tickers)
-                # print("\nRealtime Data:", realtime_data)  # Print to console instea
-                
-                # with debug_expander:
-                #     st.write("Realtime Data:")
-                #     st.write(realtime_data)
-                
-                # Collect all stock data
                 all_stock_data = []
                 for ticker in tickers:
                     metadata = stock_metadata[ticker]
@@ -660,6 +1166,8 @@ def main():
         # After display_stock_data(all_stock_data)
         if 'all_stock_data' in locals():
             add_market_trend_radar(all_stock_data)
+            add_sentiment_analysis(all_stock_data) 
+            add_sec_filings_section(all_stock_data) 
     # Display from session state if we have previous results
     elif st.session_state.all_stock_data is not None:
         display_stock_data(st.session_state.all_stock_data)
@@ -753,5 +1261,7 @@ def main():
                 )
         # Add market trend radar using session state data
         add_market_trend_radar(st.session_state.all_stock_data)
+        add_sentiment_analysis(st.session_state.all_stock_data)
+        add_sec_filings_section(st.session_state.all_stock_data) 
 if __name__ == "__main__":
     main()

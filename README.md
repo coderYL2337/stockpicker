@@ -47,4 +47,20 @@ streamlit run main.py
 
 2.Enter a description of the stocks you're interested in (e.g., "electric car manufacturers" or "hotels")
 
-3.Explore the analysis, visualizations, and download data as needed
+3.Explore:
+Detailed financial metrics and business information
+Interactive price comparison charts
+Market trend analysis with radar charts
+Recent news sentiment analysis
+SEC filings analysis and insights
+Download data in CSV format for further analysis
+
+##Data Sources
+Stock data and financials: Yahoo Finance
+News data: Yahoo Finance RSS feeds
+SEC filings: SEC EDGAR database
+Vector search: Pinecone index
+
+##Note
+The SEC filings analysis requires the company_tickers.json file to map stock tickers to their SEC CIK numbers. Make sure this file is present in your project directory before running the application.
+visit https://www.sec.gov/files/company_tickers.json to get the most recent company_tickers.json
