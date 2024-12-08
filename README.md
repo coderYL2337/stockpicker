@@ -23,8 +23,6 @@ StockPicker is an intelligent stock analysis tool that helps users discover and 
 ## Installation
 
 1. Clone the repository:
-
-```bash
 git clone https://github.com/yourusername/StockPicker.git
 cd StockPicker
 
@@ -50,4 +48,3 @@ streamlit run main.py
 2.Enter a description of the stocks you're interested in (e.g., "electric car manufacturers" or "hotels")
 
 3.Explore the analysis, visualizations, and download data as needed
-```
