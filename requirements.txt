@@ -1,0 +1,11 @@
+streamlit==1.40.2
+pinecone-client==5.0.1
+sentence-transformers==3.3.1
+yfinance==0.2.50
+requests==2.32.3
+pandas==2.2.3
+plotly==5.24.1
+openai==1.57.0
+groq==0.13.0
+python-dotenv==1.0.1
+google-generativeai==0.8.3
