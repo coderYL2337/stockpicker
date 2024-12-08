@@ -40,7 +40,7 @@ PINECONE_API_KEY=your_pinecone_api_key
 PINECONE_INDEX=your_pinecone_index_name
 EODHD_API_KEY=your_eodhd_api_key
 
-##Usage
+## Usage
 
 1.Run the Streamlit app:
 streamlit run main.py
