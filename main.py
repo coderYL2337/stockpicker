@@ -19,8 +19,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Initialize OpenAI client
-client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-
+# client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+client=OpenAI(api_key=os.getenv('GROQ_API_KEY'), base_url="https://api.groq.com/openai/v1")
+genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 # Initialize Pinecone
 pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
 index_name = os.getenv("PINECONE_INDEX")
@@ -31,8 +32,29 @@ model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
 
 # eodhdkey=os.getenv("EODHD_API_KEY")
 
+def try_gemini_request(messages: List[Dict]) -> str:
+    """Attempt to generate response with Gemini model"""
+    try:
+        # Convert chat messages to Gemini format
+        system_message = next((msg['content'] for msg in messages if msg['role'] == 'system'), '')
+        user_message = next((msg['content'] for msg in messages if msg['role'] == 'user'), '')
+        
+        # Combine system and user messages
+        combined_message = f"{system_message}\n\nUser Query: {user_message}"
+        
+        # Generate response using Gemini
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        response = model.generate_content(combined_message)
+        
+        return response.text
+    except Exception as e:
+        print(f"Failed to use Gemini: {str(e)}")
+        return None
+
+
 def try_llm_request(client, model_name: str, messages: List[Dict]) -> str:
-    """Attempt to generate response with a specific LLM model"""
+    """Attempt to generate response with fallback to different models"""
+    # Try primary model (Llama)
     try:
         response = client.chat.completions.create(
             model=model_name,
@@ -41,7 +63,36 @@ def try_llm_request(client, model_name: str, messages: List[Dict]) -> str:
         return response.choices[0].message.content
     except Exception as e:
         print(f"Failed to use {model_name}: {str(e)}")
-        return None
+        
+        # Try Gemini as first fallback
+        gemini_response = try_gemini_request(messages)
+        if gemini_response:
+            return gemini_response
+            
+        # Try GPT-4 as second fallback
+        try:
+            openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"Failed to use GPT-4: {str(e)}")
+            return None
+
+# def try_llm_request(client, model_name: str, messages: List[Dict]) -> str:
+#     """Attempt to generate response with a specific LLM model"""
+#     try:
+#         response = client.chat.completions.create(
+#             model=model_name,
+#             messages=messages
+#         )
+#         return response.choices[0].message.content
+#     except Exception as e:
+#         print(f"Failed to use {model_name}: {str(e)}")
+#         return None
+    
 def enhance_search_query_with_llm(user_query: str) -> str:
     """Use LLM to create a detailed search query"""
     messages = [
@@ -49,7 +100,8 @@ def enhance_search_query_with_llm(user_query: str) -> str:
         {"role": "user", "content": f"Create a detailed search query for: {user_query}"}
     ]
     
-    enhanced_query = try_llm_request(client, "gpt-4o-mini", messages)
+    #enhanced_query = try_llm_request(client, "gpt-4o-mini", messages)
+    enhanced_query = try_llm_request(client, "llama-3.3-70b-versatile", messages)
     print(f"\nOriginal Query: {user_query}")
     print(f"Enhanced Query: {enhanced_query}")
     return enhanced_query or user_query
@@ -115,16 +167,7 @@ def get_historical_data(ticker: str, start_date: datetime, end_date: datetime) -
         print(f"Error fetching historical data for {ticker}: {e}")
         return pd.DataFrame()
 
-# def get_historical_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
-#     """Get historical data for a single ticker using yfinance"""
-#     try:
-#         stock = yf.Ticker(ticker)
-#         df = stock.history(start=start_date, end=end_date)
-#         df.reset_index(inplace=True)  # Convert Date from index to column
-#         return df
-#     except Exception as e:
-#         print(f"Error fetching historical data for {ticker}: {e}")
-#         return pd.DataFrame()
+
 # def get_historical_data(ticker: str, start_date: datetime, end_date: datetime) -> List[Dict]:
 #     """Get historical data for a single ticker within date range"""
 #     eodhdkey = os.getenv("EODHD_API_KEY")
@@ -157,24 +200,6 @@ def get_all_historical_data(tickers: List[str], start_date: datetime, end_date: 
     
     return combined_df
 
-# def get_all_historical_data(tickers: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
-#     """Get and combine historical data for multiple tickers"""
-#     all_data = []
-    
-#     for ticker in tickers:
-#         hist_data = get_historical_data(ticker, start_date, end_date)
-#         if hist_data:
-#             df = pd.DataFrame(hist_data)
-#             df['ticker'] = ticker
-#             all_data.append(df)
-    
-#     if not all_data:
-#         return pd.DataFrame()
-        
-#     combined_df = pd.concat(all_data, ignore_index=True)
-#     combined_df['date'] = pd.to_datetime(combined_df['date'])
-    
-#     return combined_df
 
 def get_yfinance_data(ticker: str) -> Dict:
     """Get stock data from yfinance"""
@@ -232,7 +257,8 @@ def generate_analysis_with_llm(stocks_data: List[dict]) -> str:
         {"role": "user", "content": f"Analyze these stocks and their metrics: {stocks_data}"}
     ]
     
-    analysis = try_llm_request(client, "gpt-4o-mini", messages)
+    # analysis = try_llm_request(client, "gpt-4o-mini", messages)
+    analysis = try_llm_request(client, "llama-3.3-70b-versatile", messages)
     return analysis or "Unable to generate analysis at this time."
 
 # Helper functions for formatting
