@@ -27,15 +27,14 @@ git clone https://github.com/yourusername/StockPicker.git
 cd StockPicker
 
 2. Create and activate a virtual environment:
-
 python -m venv venv
 source venv/bin/activate     
 #On Windows: venv\Scripts\activate
 
-3. Install required packages:
+4. Install required packages:
 pip install -r requirements.txt
 
-4. Set up environment variables in a .env file:
+5. Set up environment variables in a .env file:
 OPENAI_API_KEY=your_openai_api_key
 PINECONE_API_KEY=your_pinecone_api_key
 PINECONE_INDEX=your_pinecone_index_name
