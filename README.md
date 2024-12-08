@@ -28,7 +28,8 @@ StockPicker is an intelligent stock analysis tool that helps users discover and 
 git clone https://github.com/yourusername/StockPicker.git
 cd StockPicker
 
-2. Create and activate a virtual environment::
+2. Create and activate a virtual environment:
+
 python -m venv venv
 source venv/bin/activate     ##On Windows: venv\Scripts\activate
 
@@ -41,7 +42,7 @@ PINECONE_API_KEY=your_pinecone_api_key
 PINECONE_INDEX=your_pinecone_index_name
 EODHD_API_KEY=your_eodhd_api_key
 
-Usage
+##Usage
 
 1.Run the Streamlit app:
 streamlit run main.py
