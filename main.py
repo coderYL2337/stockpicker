@@ -101,18 +101,42 @@ def get_batch_realtime_data(tickers: List[str]) -> List[Dict]:
         print(f"Error fetching batch real-time data: {e}")
         return []
 
-def get_historical_data(ticker: str, start_date: datetime, end_date: datetime) -> List[Dict]:
-    """Get historical data for a single ticker within date range"""
-    eodhdkey = os.getenv("EODHD_API_KEY")
-    
-    url = f"https://eodhd.com/api/table.csv?s={ticker}&a={start_date.month}&b={start_date.day}&c={start_date.year}&d={end_date.month}&e={end_date.day}&f={end_date.year}&g=d&api_token={eodhdkey}&fmt=json"
-    
+def get_historical_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    """Get historical data for a single ticker using yfinance"""
     try:
-        response = requests.get(url)
-        return response.json()
+        stock = yf.Ticker(ticker)
+        df = stock.history(start=start_date, end=end_date, interval='1d')  # Specify interval='1d'
+        if df.empty:
+            print(f"No historical data found for {ticker}")
+            return pd.DataFrame()
+        df.reset_index(inplace=True)  # Convert Date from index to column
+        return df
     except Exception as e:
         print(f"Error fetching historical data for {ticker}: {e}")
-        return []
+        return pd.DataFrame()
+
+# def get_historical_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+#     """Get historical data for a single ticker using yfinance"""
+#     try:
+#         stock = yf.Ticker(ticker)
+#         df = stock.history(start=start_date, end=end_date)
+#         df.reset_index(inplace=True)  # Convert Date from index to column
+#         return df
+#     except Exception as e:
+#         print(f"Error fetching historical data for {ticker}: {e}")
+#         return pd.DataFrame()
+# def get_historical_data(ticker: str, start_date: datetime, end_date: datetime) -> List[Dict]:
+#     """Get historical data for a single ticker within date range"""
+#     eodhdkey = os.getenv("EODHD_API_KEY")
+    
+#     url = f"https://eodhd.com/api/table.csv?s={ticker}&a={start_date.month}&b={start_date.day}&c={start_date.year}&d={end_date.month}&e={end_date.day}&f={end_date.year}&g=d&api_token={eodhdkey}&fmt=json"
+    
+#     try:
+#         response = requests.get(url)
+#         return response.json()
+#     except Exception as e:
+#         print(f"Error fetching historical data for {ticker}: {e}")
+#         return []
 
 def get_all_historical_data(tickers: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
     """Get and combine historical data for multiple tickers"""
@@ -120,18 +144,37 @@ def get_all_historical_data(tickers: List[str], start_date: datetime, end_date: 
     
     for ticker in tickers:
         hist_data = get_historical_data(ticker, start_date, end_date)
-        if hist_data:
-            df = pd.DataFrame(hist_data)
-            df['ticker'] = ticker
-            all_data.append(df)
+        if not hist_data.empty:
+            hist_data['ticker'] = ticker  # Add ticker column
+            all_data.append(hist_data)
     
     if not all_data:
         return pd.DataFrame()
         
     combined_df = pd.concat(all_data, ignore_index=True)
-    combined_df['date'] = pd.to_datetime(combined_df['date'])
+    # Make sure date is datetime
+    combined_df['Date'] = pd.to_datetime(combined_df['Date'])
     
     return combined_df
+
+# def get_all_historical_data(tickers: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
+#     """Get and combine historical data for multiple tickers"""
+#     all_data = []
+    
+#     for ticker in tickers:
+#         hist_data = get_historical_data(ticker, start_date, end_date)
+#         if hist_data:
+#             df = pd.DataFrame(hist_data)
+#             df['ticker'] = ticker
+#             all_data.append(df)
+    
+#     if not all_data:
+#         return pd.DataFrame()
+        
+#     combined_df = pd.concat(all_data, ignore_index=True)
+#     combined_df['date'] = pd.to_datetime(combined_df['date'])
+    
+#     return combined_df
 
 def get_yfinance_data(ticker: str) -> Dict:
     """Get stock data from yfinance"""
@@ -161,7 +204,7 @@ def create_price_comparison_chart(hist_data: pd.DataFrame, selected_tickers: Lis
         
     # Only use selected tickers if provided
     if selected_tickers:
-        price_data = hist_data.pivot(index='date', columns='ticker', values='close')
+        price_data = hist_data.pivot(index='Date', columns='ticker', values='Close')
         price_data = price_data[selected_tickers]  # Filter for selected tickers only
     else:
         price_data = hist_data.pivot(index='date', columns='ticker', values='close')
@@ -371,7 +414,7 @@ def main():
                     # Left column metrics
                     with metrics_cols[0]:
                         metrics_left = {
-                            "Current Price": f"${stock['realtime_data'].get('close', 0):.2f}",
+                            "EOD Price": f"${stock['realtime_data'].get('close', 0):.2f}",
                             "Market Cap": format_market_cap(stock['yfinance_data'].get('marketCap', 0)),
                             "Sector": st.session_state.stock_metadata[stock['ticker']].get('Sector', 'N/A'),
                             "P/E Ratio": f"{stock['yfinance_data'].get('trailingPE', 0):.2f}",
@@ -452,8 +495,8 @@ def main():
 
             try:
                 # Get realtime data
-                realtime_data = get_batch_realtime_data(tickers)
-                print("\nRealtime Data:", realtime_data)  # Print to console instea
+                # realtime_data = get_batch_realtime_data(tickers)
+                # print("\nRealtime Data:", realtime_data)  # Print to console instea
                 
                 # with debug_expander:
                 #     st.write("Realtime Data:")
@@ -464,14 +507,26 @@ def main():
                 for ticker in tickers:
                     metadata = stock_metadata[ticker]
                     yf_data = get_yfinance_data(ticker)
-                    rt_data = next((item for item in realtime_data if item['code'].replace('.US', '') == ticker), {})
-                    
+                    # rt_data = next((item for item in realtime_data if item['code'].replace('.US', '') == ticker), {})
+                    # Get current price using valid period
+                    try:
+                        stock = yf.Ticker(ticker)
+                        current_data = stock.history(period='1d')
+                        current_price = current_data['Close'].iloc[-1] if not current_data.empty else 0
+                        current_volume = current_data['Volume'].iloc[-1] if not current_data.empty else 0
+                    except Exception as e:
+                        print(f"Error fetching current price for {ticker}: {e}")
+                        current_price = 0
+                        current_volume = 0
                     stock_data = {
                         'ticker': ticker,
                         'name': metadata.get('Name', ''),
                         'description': metadata.get('Business Summary', ''),
                         'yfinance_data': yf_data,
-                        'realtime_data': rt_data
+                        'realtime_data': {
+                            'close': current_price,
+                            'volume': current_volume
+                        }
                     }
                     all_stock_data.append(stock_data)
                 
@@ -493,7 +548,7 @@ def main():
                             'Name': stock['name'],
                             'Business Summary': stock['description'],
                             'Website': stock['yfinance_data'].get('website', ''),
-                            'Current Price': stock['realtime_data'].get('close', 0),
+                            'EOD Price': stock['realtime_data'].get('close', 0),
                             'Volume': stock['realtime_data'].get('volume', 0),
                             'Market Cap': stock['yfinance_data'].get('marketCap', 0),
                             'Sector': stock_metadata[stock['ticker']].get('Sector', ''),
@@ -593,7 +648,7 @@ def main():
                     'Name': stock['name'],
                     'Business Summary': stock['description'],
                     'Website': stock['yfinance_data'].get('website', ''),
-                    'Current Price': stock['realtime_data'].get('close', 0),
+                    'EOD Price': stock['realtime_data'].get('close', 0),
                     'Volume': stock['realtime_data'].get('volume', 0),
                     'Market Cap': stock['yfinance_data'].get('marketCap', 0),
                     'Sector': st.session_state.stock_metadata[stock['ticker']].get('Sector', ''),
