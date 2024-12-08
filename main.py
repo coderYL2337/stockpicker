@@ -154,7 +154,6 @@ def get_yfinance_data(ticker: str) -> Dict:
         return {}
 
 def create_price_comparison_chart(hist_data: pd.DataFrame, selected_tickers: List[str] = None) -> None:
-    st.subheader("Stock Price Comparison")
     """Create normalized price comparison chart with optional ticker selection"""
     if hist_data.empty:
         st.warning("No historical data available for comparison")
@@ -627,7 +626,7 @@ def main():
         
         # Recreate comparison section
        # st.subheader("Stock Price Comparison")
-        
+        st.subheader("Stock Price Comparison")
         col1, col2 = st.columns(2)
         with col1:
             start_date = st.date_input(
