@@ -23,8 +23,6 @@ StockPicker is an intelligent stock analysis tool that helps users discover and 
 ## Installation
 
 1. Clone the repository:
-git clone https://github.com/yourusername/StockPicker.git
-cd StockPicker
 
 2. Create and activate a virtual environment:
 python -m venv venv
