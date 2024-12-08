@@ -154,6 +154,7 @@ def get_yfinance_data(ticker: str) -> Dict:
         return {}
 
 def create_price_comparison_chart(hist_data: pd.DataFrame, selected_tickers: List[str] = None) -> None:
+    st.subheader("Stock Price Comparison")
     """Create normalized price comparison chart with optional ticker selection"""
     if hist_data.empty:
         st.warning("No historical data available for comparison")
@@ -323,7 +324,7 @@ def main():
     
     query = st.text_input(
         label="Stock Search",
-        placeholder="e.g., 'electric car manufacturers' or 'data center builders'",
+        placeholder="e.g., 'electric car manufacturers' or 'cloud computing companies'",
         label_visibility="collapsed"
     )
     
