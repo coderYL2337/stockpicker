@@ -573,9 +573,9 @@ def main():
                         
             except Exception as e:
                 st.error("Error fetching stock data")
-                with debug_expander:
-                    st.write("**Error Details:**")
-                    st.code(f"Error Type: {type(e)}\nError Message: {str(e)}")
+                print("**Error Details:**")           # Level 4
+                print(f"Error Type: {type(e)}...")    # Level 4
+                st.error("Error fetching stock data")
         # After display_stock_data(all_stock_data)
         if 'all_stock_data' in locals():
             add_market_trend_radar(all_stock_data)
