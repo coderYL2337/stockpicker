@@ -10,7 +10,12 @@ StockPicker is an intelligent stock analysis tool that helps users discover and 
   - Price comparison charts with customizable date ranges
   - Market trend radar showing relative performance across key metrics
   - Factor-based analysis with detailed explanations
-- **Data Export**: Download stock information and historical data as CSV files
+- **Sentiment Analysis**: Analyze recent news sentiment with detailed breakdowns
+- **SEC Filings Analysis**: 
+  - Access and analyze latest 10-Q filings
+  - View key insights with performance metrics
+  - Direct links to official SEC documents
+- **Data Export**: Download stock information, historical data, and news analysis as CSV files
 
 ## Tech Stack
 
@@ -19,6 +24,7 @@ StockPicker is an intelligent stock analysis tool that helps users discover and 
 - Pinecone for vector similarity search
 - YFinance for stock data
 - Plotly for interactive visualizations
+- BeautifulSoup4 for parsing SEC filings and news content
 
 ## Installation
 
@@ -55,12 +61,12 @@ Recent news sentiment analysis
 SEC filings analysis and insights
 Download data in CSV format for further analysis
 
-##Data Sources
+## Data Sources
 Stock data and financials: Yahoo Finance
 News data: Yahoo Finance RSS feeds
 SEC filings: SEC EDGAR database
 Vector search: Pinecone index
 
-##Note
+## Note
 The SEC filings analysis requires the company_tickers.json file to map stock tickers to their SEC CIK numbers. Make sure this file is present in your project directory before running the application.
 visit https://www.sec.gov/files/company_tickers.json to get the most recent company_tickers.json
