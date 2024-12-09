@@ -146,24 +146,6 @@ def search_stocks_in_pinecone(enhanced_query: str) -> List[Dict]:
         print(f"\nError during Pinecone search: {str(e)}")
         return []
 
-def get_batch_realtime_data(tickers: List[str]) -> List[Dict]:
-    """Get real-time data for multiple stocks in one API call"""
-    if not tickers:
-        return []
-    
-    main_ticker = tickers[0]
-    other_tickers = ','.join(tickers[1:])
-    
-    eodhdkey = os.getenv("EODHD_API_KEY")
-    url = f"https://eodhd.com/api/real-time/{main_ticker}?s={other_tickers}&api_token={eodhdkey}&fmt=json"
-    
-    try:
-        response = requests.get(url)
-        return response.json()
-    except Exception as e:
-        print(f"Error fetching batch real-time data: {e}")
-        return []
-
 def get_historical_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
     """Get historical data for a single ticker using yfinance"""
     try:
@@ -178,19 +160,6 @@ def get_historical_data(ticker: str, start_date: datetime, end_date: datetime) -
         print(f"Error fetching historical data for {ticker}: {e}")
         return pd.DataFrame()
 
-
-# def get_historical_data(ticker: str, start_date: datetime, end_date: datetime) -> List[Dict]:
-#     """Get historical data for a single ticker within date range"""
-#     eodhdkey = os.getenv("EODHD_API_KEY")
-    
-#     url = f"https://eodhd.com/api/table.csv?s={ticker}&a={start_date.month}&b={start_date.day}&c={start_date.year}&d={end_date.month}&e={end_date.day}&f={end_date.year}&g=d&api_token={eodhdkey}&fmt=json"
-    
-#     try:
-#         response = requests.get(url)
-#         return response.json()
-#     except Exception as e:
-#         print(f"Error fetching historical data for {ticker}: {e}")
-#         return []
 
 def get_all_historical_data(tickers: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
     """Get and combine historical data for multiple tickers"""
@@ -538,117 +507,6 @@ def analyze_news_sentiment(news_items: List[Dict]) -> Tuple[float, Dict]:
     avg_sentiment = sum(article_sentiments) / len(article_sentiments)
     
     return avg_sentiment, latest_analysis
-
-def add_sentiment_analysis(all_stock_data: List[Dict]):
-    """Add sentiment analysis section to the app"""
-    st.subheader("Sentiment Analysis")
-    
-    # Fetch and analyze news for each stock
-    sentiment_data = []
-    news_data = []
-    
-    with st.spinner("Analyzing recent news..."):
-        for stock in all_stock_data:
-            ticker = stock['ticker']
-            news_items = fetch_stock_news(ticker, max_articles=5, days_back=7)
-            
-            # Analyze all news items - this will now add sentiment scores to each item
-            avg_sentiment, analysis = analyze_news_sentiment(news_items)
-            
-            sentiment_data.append({
-                'ticker': ticker,
-                'sentiment_score': avg_sentiment,
-                'name': stock['name']
-            })
-            
-            # Store news items with their individual sentiment scores
-            news_data.extend(news_items)
-    
-    # Create sentiment score chart with custom color scheme
-    sentiment_df = pd.DataFrame(sentiment_data)
-    sentiment_df = sentiment_df.sort_values('sentiment_score', ascending=False)
-    
-    fig = px.bar(sentiment_df,
-                 x='ticker',
-                 y='sentiment_score',
-                 title='Average Sentiment Score by Stock',
-                 labels={'ticker': 'Stock Symbol', 
-                        'sentiment_score': 'Average Sentiment Score (-100 to +100)'})
-    
-    # Update layout with proper scaling and zero line
-    fig.update_layout(
-        yaxis=dict(
-            range=[-100, 100],      # Fixed range from -100 to +100
-            zeroline=True,          # Show line at y=0
-            zerolinewidth=1,        # Width of zero line
-            zerolinecolor='gray',   # Color of zero line
-            gridcolor='lightgray',  # Light grid lines
-            title_standoff=10       # Space between title and axis
-        ),
-        hovermode='x unified',
-        hoverlabel=dict(
-            bgcolor="white",
-            font_size=14
-        ),
-        plot_bgcolor='white',       # White background
-        margin=dict(t=30, b=0, r=10, l=10)  # Adjust margins
-    )
-    
-    # Color bars based on sentiment value
-    fig.update_traces(marker_color=sentiment_df['sentiment_score'].apply(
-        lambda x: 'rgb(220,20,60)' if x <= -50 else      # Deep red for very negative
-        'rgb(255,99,71)' if x < 0 else                   # Light red for slightly negative
-        'rgb(25,25,112)' if x >= 50 else                 # Deep blue for very positive
-        'rgb(65,105,225)'                                # Light blue for slightly positive
-    ))
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Display rankings and analysis
-    st.subheader("Stock Rankings based on News Sentiment:")
-    for _, row in sentiment_df.iterrows():
-        stock_news = [item for item in news_data if item['ticker'] == row['ticker']]
-        if stock_news:
-            st.write(f"{row['ticker']} ({row['name']}): Sentiment score {row['sentiment_score']:.2f}")
-            with st.expander(f"Details for {row['ticker']}"):
-                latest = stock_news[0]
-                st.write("**Recent Developments:**", latest.get('recent_developments', 'N/A'))
-                st.write("**Risks & Challenges:**", latest.get('risks_challenges', 'N/A'))
-                st.write("**Future Outlook:**", latest.get('future_outlook', 'N/A'))
-    
-    # Display detailed news data in a scrollable window
-    st.subheader("Detailed News Data")
-    
-    # Create a DataFrame with all the news data including individual sentiment scores
-    detailed_news_df = pd.DataFrame([
-        {
-            'URL': item['link'],
-            'Published Time': item['pubDate'],
-            'Related Tickers': item['ticker'],
-            'Scraped Text': item.get('description', ''),
-            'Sentiment': f"{item.get('sentiment_score', 0):.1f}",  # Format to 1 decimal place
-            'Recent Developments': item.get('recent_developments', ''),
-            'Risks & Challenges': item.get('risks_challenges', ''),
-            'Future Outlook': item.get('future_outlook', '')
-        }
-        for item in news_data
-    ])
-    
-    # Display the DataFrame in a scrollable container
-    st.dataframe(
-        detailed_news_df,
-        use_container_width=True,
-        height=300
-    )
-    
-    # Create downloadable CSV
-    csv = detailed_news_df.to_csv(index=False)
-    st.download_button(
-        label="Download News Data as CSV",
-        data=csv,
-        file_name="stock_news_analysis.csv",
-        mime="text/csv"
-    )
 
 
 def add_sentiment_analysis(all_stock_data: List[Dict]):
