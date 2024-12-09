@@ -775,7 +775,7 @@ def add_sec_filings_section(all_stock_data: List[Dict]):
 
 
 def main():
-    st.set_page_config(page_title="Automated Stock Analysis", layout="wide", page_icon="📈")
+    st.set_page_config(page_title="Stock Picker", layout="wide", page_icon="📈")
     
     # Initialize session state
     if 'search_results' not in st.session_state:
@@ -786,7 +786,7 @@ def main():
         st.session_state.stock_metadata = None
     
     # Initial View
-    st.title("Automated Stock Analysis")
+    st.title("Stock Picker 📈")
     st.write("Enter a description of the kinds of stocks you are looking for:")
     
     query = st.text_input(
@@ -796,6 +796,8 @@ def main():
     )
     
     search_clicked = st.button("Find Stocks")
+
+
 
     def display_stock_data(stock_data_list):
         st.subheader("Found Stocks")
@@ -853,6 +855,11 @@ def main():
 
                     # Right column metrics
                     with metrics_cols[1]:
+                        # Add Yahoo Finance link first
+                        yahoo_finance_url = f"https://finance.yahoo.com/quote/{stock['ticker']}"
+                        st.write("**Live Quote**")
+                        st.write(f"[View on Yahoo ↗]({yahoo_finance_url})")
+                        
                         metrics_right = {
                             "Volume": format_number(stock['realtime_data'].get('volume', 0)),
                             "Revenue Growth": f"{stock['yfinance_data'].get('revenueGrowth', 0):.1f}%",
@@ -864,8 +871,6 @@ def main():
                         for label, value in metrics_right.items():
                             st.write(f"**{label}**")
                             st.write(value)
-
-
     # Process new search
     if search_clicked and query:
         with st.spinner("Processing your request..."):
