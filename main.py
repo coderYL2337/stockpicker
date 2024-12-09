@@ -117,44 +117,79 @@ def enhance_search_query_with_llm(user_query: str) -> str:
     print(f"Enhanced Query: {enhanced_query}")
     return enhanced_query or user_query
 
-def search_stocks_in_pinecone(enhanced_query: str) -> List[Dict]:
-    """Search Pinecone index using the enhanced query"""
+    
+def search_stocks_in_pinecone(enhanced_query: str, desired_count: int = 6) -> List[Dict]:
+    """Search Pinecone index using the enhanced query and filter for valid stocks"""
     try:
         query_embedding = model.encode(enhanced_query).tolist()
+        valid_matches = []
+        top_k = desired_count  # Start with desired count
         
-        print("\nDebug Information:")
-        print(f"Query Embedding (first 5 values): {query_embedding[:5]}")
+        while len(valid_matches) < desired_count:
+            results = index.query(
+                vector=query_embedding,
+                namespace="stock-descriptions",
+                top_k=top_k,  # Request more results each time
+                include_metadata=True
+            )
+            
+            # Process results and filter invalid securities
+            for match in results.matches:
+                ticker = match.metadata.get('Ticker', '')
+                
+                # Skip if ticker has already been processed
+                if any(vm.metadata['Ticker'] == ticker for vm in valid_matches):
+                    continue
+                
+                # Skip if ticker ends with W (warrants) or has other special suffixes
+                if any(ticker.endswith(suffix) for suffix in ['W', 'U', 'R', 'P', 'RT']):
+                    print(f"Filtered out {ticker} (special security type)")
+                    continue
+                    
+                # Skip if ticker length > 5 (likely not a regular stock)
+                if len(ticker) > 5:
+                    print(f"Filtered out {ticker} (unusual ticker length)")
+                    continue
+                
+                valid_matches.append(match)
+                if len(valid_matches) >= desired_count:
+                    break
+            
+            # If we've processed all results but still don't have enough valid matches
+            if len(results.matches) < top_k or len(valid_matches) >= desired_count:
+                break
+                
+            # Increase top_k for next query if we need more results
+            top_k += desired_count
         
-        results = index.query(
-            vector=query_embedding,
-            namespace="stock-descriptions",
-            top_k=6,
-            include_metadata=True
-        )
+        print(f"\nNumber of valid matches found: {len(valid_matches)}")
+        for i, match in enumerate(valid_matches):
+            print(f"\nMatch {i+1}:")
+            print(f"Score: {match.score}")
+            print(f"Ticker: {match.metadata.get('Ticker', '')}")
+            print(f"Business Summary: {match.metadata.get('Business Summary', '')[:100]}...")
         
-        print(f"\nNumber of matches found: {len(results.matches)}")
-        if results.matches:
-            for i, match in enumerate(results.matches):
-                print(f"\nMatch {i+1}:")
-                print(f"Score: {match.score}")
-                print(f"Metadata keys: {match.metadata.keys()}")
-                print(f"Business Summary: {match.metadata.get('Business Summary', '')[:100]}...")
-        
-        return results.matches
+        return valid_matches
         
     except Exception as e:
         print(f"\nError during Pinecone search: {str(e)}")
         return []
 
+
 def get_historical_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
     """Get historical data for a single ticker using yfinance"""
     try:
+        # Skip invalid tickers
+        if any(ticker.endswith(suffix) for suffix in ['W', 'U', 'R', 'P', 'RT']) or len(ticker) > 5:
+            print(f"Skipping historical data for invalid ticker: {ticker}")
+            return pd.DataFrame()
+            
         stock = yf.Ticker(ticker)
-        df = stock.history(start=start_date, end=end_date, interval='1d')  # Specify interval='1d'
+        df = stock.history(start=start_date, end=end_date, interval='1d')
         if df.empty:
             print(f"No historical data found for {ticker}")
             return pd.DataFrame()
-        df.reset_index(inplace=True)  # Convert Date from index to column
+        df.reset_index(inplace=True)
         return df
     except Exception as e:
         print(f"Error fetching historical data for {ticker}: {e}")
@@ -181,9 +216,15 @@ def get_all_historical_data(tickers: List[str], start_date: datetime, end_date: 
     return combined_df
 
 
+
 def get_yfinance_data(ticker: str) -> Dict:
-    """Get stock data from yfinance"""
+    """Get stock data from yfinance with validation"""
     try:
+        # Skip invalid tickers
+        if any(ticker.endswith(suffix) for suffix in ['W', 'U', 'R', 'P', 'RT']) or len(ticker) > 5:
+            print(f"Skipping yfinance data for invalid ticker: {ticker}")
+            return {}
+            
         stock = yf.Ticker(ticker)
         info = stock.info
         return {
@@ -201,43 +242,64 @@ def get_yfinance_data(ticker: str) -> Dict:
         print(f"Error fetching yfinance data for {ticker}: {str(e)}")
         return {}
 
+
+
 def create_price_comparison_chart(hist_data: pd.DataFrame, selected_tickers: List[str] = None) -> None:
-    """Create normalized price comparison chart with optional ticker selection"""
+    """Create normalized price comparison chart with error handling"""
     if hist_data.empty:
         st.warning("No historical data available for comparison")
         return
         
-    # Only use selected tickers if provided
-    if selected_tickers:
+    # Filter out any invalid tickers
+    valid_tickers = [ticker for ticker in selected_tickers if not any(ticker.endswith(suffix) for suffix in ['W', 'U', 'R', 'P', 'RT'])]
+    
+    if not valid_tickers:
+        st.warning("No valid tickers selected for comparison")
+        return
+
+    try:
         price_data = hist_data.pivot(index='Date', columns='ticker', values='Close')
-        price_data = price_data[selected_tickers]  # Filter for selected tickers only
-    else:
-        price_data = hist_data.pivot(index='date', columns='ticker', values='close')
-    
-    normalized_data = price_data.apply(lambda x: (x / x.iloc[0] - 1) * 100)
-    
-    fig = px.line(normalized_data,
-                  title='Normalized Stock Price History (% Change)',
-                  labels={'value': 'Price Change (%)',
-                         'date': 'Date',
-                         'variable': 'Stock'})
-    
-    fig.update_layout(
-        legend_title_text='Stocks',
-        hovermode='x unified'
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
+        price_data = price_data[valid_tickers]
+        
+        if price_data.empty:
+            st.warning("No price data available for selected tickers")
+            return
+            
+        normalized_data = price_data.apply(lambda x: (x / x.iloc[0] - 1) * 100)
+        
+        fig = px.line(normalized_data,
+                     title='Normalized Stock Price History (% Change)',
+                     labels={'value': 'Price Change (%)',
+                            'date': 'Date',
+                            'variable': 'Stock'})
+        
+        fig.update_layout(
+            legend_title_text='Stocks',
+            hovermode='x unified'
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.error(f"Error creating price comparison chart: {str(e)}")
+
 
 
 def generate_analysis_with_llm(stocks_data: List[dict]) -> str:
-    """Generate analysis text using LLM"""
-    messages = [
-        {"role": "system", "content": "You are a stock market analyst. Provide a concise analysis of the following stocks, comparing their performance metrics and business models. Focus on key differentiators and potential opportunities/risks."},
-        {"role": "user", "content": f"Analyze these stocks and their metrics: {stocks_data}"}
+    """Generate analysis text using LLM with filtering"""
+    # Filter out invalid stocks before analysis
+    valid_stocks = [
+        stock for stock in stocks_data 
+        if not any(stock['ticker'].endswith(suffix) for suffix in ['W', 'U', 'R', 'P', 'RT'])
     ]
     
-    # analysis = try_llm_request(client, "gpt-4o-mini", messages)
+    if not valid_stocks:
+        return "No valid stocks available for analysis."
+        
+    messages = [
+        {"role": "system", "content": "You are a stock market analyst. Provide a concise analysis of the following stocks, comparing their performance metrics and business models. Focus on key differentiators and potential opportunities/risks."},
+        {"role": "user", "content": f"Analyze these stocks and their metrics: {valid_stocks}"}
+    ]
+    
     analysis = try_llm_request(client, "llama-3.3-70b-versatile", messages)
     return analysis or "Unable to generate analysis at this time."
 
