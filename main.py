@@ -217,30 +217,47 @@ def get_all_historical_data(tickers: List[str], start_date: datetime, end_date: 
 
 
 
+@st.cache_data(ttl=600, show_spinner=False)
 def get_yfinance_data(ticker: str) -> Dict:
     """Get stock data from yfinance with validation"""
-    try:
-        # Skip invalid tickers
-        if any(ticker.endswith(suffix) for suffix in ['W', 'U', 'R', 'P', 'RT']) or len(ticker) > 5:
-            print(f"Skipping yfinance data for invalid ticker: {ticker}")
-            return {}
-            
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        return {
-            'website': info.get('website', ''),
-            'earningsGrowth': info.get('earningsGrowth', 0) * 100 if isinstance(info.get('earningsGrowth'), (int, float)) else 0,
-            'revenueGrowth': info.get('revenueGrowth', 0) * 100 if isinstance(info.get('revenueGrowth'), (int, float)) else 0,
-            'grossMargins': info.get('grossMargins', 0) * 100 if isinstance(info.get('grossMargins'), (int, float)) else 0,
-            'ebitdaMargins': info.get('ebitdaMargins', 0) * 100 if isinstance(info.get('ebitdaMargins'), (int, float)) else 0,
-            '52WeekChange': info.get('52WeekChange', 0),
-            'trailingPE': info.get('trailingPE', 0),
-            'beta': info.get('beta', 0),
-            'marketCap': info.get('marketCap', 0)
-        }
-    except Exception as e:
-        print(f"Error fetching yfinance data for {ticker}: {str(e)}")
+    # Skip invalid tickers
+    if any(ticker.endswith(suffix) for suffix in ['W', 'U', 'R', 'P', 'RT']) or len(ticker) > 5:
+        print(f"Skipping yfinance data for invalid ticker: {ticker}")
         return {}
+
+    info = {}
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info or {}
+    except Exception as e:
+        # Yahoo's quoteSummary endpoint (used by .info) is commonly rate-limited
+        # or blocked on shared/cloud IPs even when .history() still works.
+        print(f"Error fetching yfinance .info for {ticker}: {type(e).__name__}: {e}")
+
+    # Fall back to the lighter-weight fast_info endpoint for key numeric fields
+    # when .info came back empty (e.g. blocked/rate-limited response).
+    if not info:
+        try:
+            fast = yf.Ticker(ticker).fast_info
+            info = {
+                'marketCap': getattr(fast, 'market_cap', 0) or 0,
+                'beta': 0,
+                'trailingPE': 0,
+            }
+        except Exception as e:
+            print(f"Error fetching yfinance fast_info for {ticker}: {type(e).__name__}: {e}")
+
+    return {
+        'website': info.get('website', ''),
+        'earningsGrowth': info.get('earningsGrowth', 0) * 100 if isinstance(info.get('earningsGrowth'), (int, float)) else 0,
+        'revenueGrowth': info.get('revenueGrowth', 0) * 100 if isinstance(info.get('revenueGrowth'), (int, float)) else 0,
+        'grossMargins': info.get('grossMargins', 0) * 100 if isinstance(info.get('grossMargins'), (int, float)) else 0,
+        'ebitdaMargins': info.get('ebitdaMargins', 0) * 100 if isinstance(info.get('ebitdaMargins'), (int, float)) else 0,
+        '52WeekChange': info.get('52WeekChange', 0),
+        'trailingPE': info.get('trailingPE', 0),
+        'beta': info.get('beta', 0),
+        'marketCap': info.get('marketCap', 0)
+    }
 
 
 
