@@ -31,9 +31,9 @@ StockPicker is an intelligent stock analysis tool that helps users discover and 
 1. Clone the repository:
 
 2. Create and activate a virtual environment:
-   python -m venv venv
-   source venv/bin/activate  
-   #On Windows: venv\Scripts\activate
+   python -m venv .venv
+   source .venv/bin/activate  
+   #On Windows: .venv\Scripts\activate
 
 3. Install required packages:
    pip install -r requirements.txt
